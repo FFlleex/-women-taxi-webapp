@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Маршрут поездки</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg: var(--tg-theme-bg-color, #ffffff);
+      --text: var(--tg-theme-text-color, #1f2937);
+      --hint: var(--tg-theme-hint-color, #6b7280);
+      --button: var(--tg-theme-button-color, #2481cc);
+      --button-text: var(--tg-theme-button-text-color, #ffffff);
+      --secondary: var(--tg-theme-secondary-bg-color, #f3f4f6);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex;
+      flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header { padding: 10px 14px 6px; }
+    h1 { margin: 0 0 4px; font-size: 17px; }
+    .hint { color: var(--hint); font-size: 13px; line-height: 1.35; }
+    .modes { display: flex; gap: 8px; padding: 8px 14px; }
+    .mode {
+      flex: 1;
+      border: 1px solid rgba(127,127,127,.35);
+      border-radius: 10px;
+      background: var(--secondary);
+      color: var(--text);
+      padding: 9px 8px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .mode.active { background: var(--button); color: var(--button-text); border-color: transparent; }
+    #map { flex: 1; min-height: 260px; }
+    .panel { padding: 10px 14px 14px; background: var(--bg); }
+    .point { font-size: 13px; margin: 2px 0; color: var(--hint); }
+    .point b { color: var(--text); }
+    .actions { display: flex; gap: 8px; margin-top: 10px; }
+    button.action {
+      flex: 1;
+      border: 0;
+      border-radius: 10px;
+      padding: 12px 10px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    #locate { background: var(--secondary); color: var(--text); }
+    #submit { background: var(--button); color: var(--button-text); }
+    #submit:disabled { opacity: .45; cursor: not-allowed; }
+    .leaflet-container { font: inherit; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Маршрут поездки</h1>
+    <div class="hint">Выберите режим и нажмите на карту. Адреса определит бот.</div>
+  </header>
+
+  <div class="modes">
+    <button class="mode active" id="mode-pickup" type="button">📍 Подача</button>
+    <button class="mode" id="mode-destination" type="button">🏁 Назначение</button>
+  </div>
+
+  <div id="map"></div>
+
+  <div class="panel">
+    <div class="point">Подача: <b id="pickup-text">не выбрана</b></div>
+    <div class="point">Назначение: <b id="destination-text">не выбрано</b></div>
+    <div class="actions">
+      <button class="action" id="locate" type="button">Моё местоположение</button>
+      <button class="action" id="submit" type="button" disabled>Отправить</button>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+      if (tg.themeParams && tg.themeParams.bg_color) {
+        document.documentElement.style.setProperty(
+          "--tg-theme-bg-color", tg.themeParams.bg_color
+        );
+      }
+    }
+
+    const KAZAN = [55.796127, 49.106414];
+    const map = L.map("map", { zoomControl: true }).setView(KAZAN, 13);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap"
+    }).addTo(map);
+
+    const state = {
+      mode: "pickup",
+      pickup: null,
+      destination: null
+    };
+
+    const colors = { pickup: "#16a34a", destination: "#dc2626" };
+    const icons = {
+      pickup: L.divIcon({
+        className: "",
+        html: '<div style="font-size:28px;line-height:28px">📍</div>',
+        iconSize: [28, 28],
+        iconAnchor: [14, 28]
+      }),
+      destination: L.divIcon({
+        className: "",
+        html: '<div style="font-size:28px;line-height:28px">🏁</div>',
+        iconSize: [28, 28],
+        iconAnchor: [14, 28]
+      })
+    };
+
+    const markers = { pickup: null, destination: null };
+
+    function formatPoint(point) {
+      return point ? point.lat.toFixed(5) + ", " + point.lon.toFixed(5) : null;
+    }
+
+    function render() {
+      document.getElementById("pickup-text").textContent =
+        formatPoint(state.pickup) || "не выбрана";
+      document.getElementById("destination-text").textContent =
+        formatPoint(state.destination) || "не выбрано";
+      document.getElementById("submit").disabled =
+        !(state.pickup && state.destination);
+    }
+
+    function setMode(mode) {
+      state.mode = mode;
+      document.getElementById("mode-pickup").classList.toggle(
+        "active", mode === "pickup"
+      );
+      document.getElementById("mode-destination").classList.toggle(
+        "active", mode === "destination"
+      );
+    }
+
+    function setPoint(mode, lat, lon) {
+      state[mode] = { lat: Number(lat), lon: Number(lon) };
+      if (markers[mode]) {
+        markers[mode].setLatLng([lat, lon]);
+      } else {
+        markers[mode] = L.marker([lat, lon], {
+          icon: icons[mode],
+          draggable: true
+        }).addTo(map);
+        markers[mode].on("dragend", function () {
+          const p = markers[mode].getLatLng();
+          state[mode] = { lat: p.lat, lon: p.lng };
+          render();
+        });
+      }
+      render();
+    }
+
+    map.on("click", function (event) {
+      setPoint(state.mode, event.latlng.lat, event.latlng.lng);
+    });
+
+    document.getElementById("mode-pickup").addEventListener("click", function () {
+      setMode("pickup");
+    });
+    document.getElementById("mode-destination").addEventListener("click", function () {
+      setMode("destination");
+    });
+
+    document.getElementById("locate").addEventListener("click", function () {
+      if (!navigator.geolocation) {
+        alert("Геолокация недоступна в этом браузере.");
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(function (position) {
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+        setPoint("pickup", lat, lon);
+        map.setView([lat, lon], 15);
+      }, function () {
+        alert("Не удалось получить геолокацию.");
+      }, { enableHighAccuracy: true, timeout: 10000 });
+    });
+
+    document.getElementById("submit").addEventListener("click", function () {
+      if (!(state.pickup && state.destination)) {
+        return;
+      }
+      const payload = {
+        pickup: state.pickup,
+        destination: state.destination
+      };
+      if (!tg) {
+        alert("Откройте эту страницу через Telegram.");
+        return;
+      }
+      tg.sendData(JSON.stringify(payload));
+      tg.close();
+    });
+
+    render();
+    setTimeout(function () { map.invalidateSize(); }, 200);
+  </script>
+</body>
+</html>
