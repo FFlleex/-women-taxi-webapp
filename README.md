@@ -41,7 +41,7 @@ python check_deploy.py
 Для проверки вёрстки в браузере:
 
 ```powershell
-cd C:\women-taxi-bot\webapp
+cd "C:\Users\Тима\AppData\Local\Cline\women-taxi-bot\webapp"
 python -m http.server 8080
 ```
 
